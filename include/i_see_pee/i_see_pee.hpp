@@ -255,9 +255,13 @@ namespace odom {
 
 struct interface_tf {
 
-  interface_tf();
+  interface_tf(ros::NodeHandle &_nh);
   transform_t get(const std::string& _from, const std::string& _to);
   void set(const transform_t &_tf,
+           const stamp_t &_stamp,
+           const std::string &_from,
+           const std::string &_to) noexcept;
+  void pub(const transform_t &_tf,
            const stamp_t &_stamp,
            const std::string &_from,
            const std::string &_to) noexcept;
@@ -266,6 +270,7 @@ private:
   tf2_ros::Buffer buffer_;
   tf2_ros::TransformListener tf_listener_;
   tf2_ros::TransformBroadcaster tf_broadcaster_;
+  ros::Publisher pub_;
 };
 
 struct interface_rviz {
@@ -391,6 +396,7 @@ private:
   icp::scan_matcher icp_;
   scan::interface scan_interface_;
   odom::frame_handler frame_handler_;
+  ros::Publisher pub_;
 };
 
 } // namespace i_see_pee

@@ -386,7 +386,9 @@ interface::interface(ros::NodeHandle &_nh, controller_base_ *_controller) :
 
 namespace odom {
 
-interface_tf::interface_tf() : tf_listener_(buffer_) {}
+interface_tf::interface_tf(ros::NodeHandle &_nh) : tf_listener_(buffer_) {
+  pub_ = _nh.advertise<geometry_msgs::TransformStamped>("/tf_icp", 1, false);
+}
 
 transform_t interface_tf::get(const std::string &_from, const std::string &_to) {
   // will throw if the tf::lookupTransform fails
@@ -398,8 +400,19 @@ void interface_tf::set(const transform_t &_tf,
                        const stamp_t &_stamp,
                        const std::string &_from,
                        const std::string &_to) noexcept {
-  const auto out = internal::to_transform(_tf, _stamp, _from, _to);
+  const auto out = internal::to_transform(_tf, _stamp, _from, _to + "_icp");
   tf_broadcaster_.sendTransform(out);
+}
+
+void interface_tf::pub(const transform_t &_tf,
+                       const stamp_t &_stamp,
+                       const std::string &_from,
+                       const std::string &_to) noexcept {
+  
+  const auto out = internal::to_transform(_tf, _stamp, _from, _to);
+  geometry_msgs::TransformStamped msg;
+  msg = out;
+  pub_.publish(msg);
 }
 
 constexpr char interface_rviz::topic[];
@@ -434,7 +447,8 @@ frame_handler::frame_handler(ros::NodeHandle &_nh) :
         rviz_(_nh, map_to_base_),
         base_to_sensor_(transform_t::Identity()),
         map_to_base_(transform_t::Identity()),
-        odom_to_base_(transform_t::Identity()) {
+        odom_to_base_(transform_t::Identity()),
+        tf_(_nh) {
   ros::NodeHandle pnh(_nh, "odom");
 
   map_frame_ = pnh.param("map_frame", std::string{"map"});
@@ -497,6 +511,7 @@ frame_handler::get_base_to_sensor(const std::string &_scan_frame) noexcept {
 void frame_handler::set_map_to_odom(const transform_t &_tf,
                                     const stamp_t &_stamp) noexcept {
   tf_.set(_tf, _stamp, map_frame_, odom_frame_);
+  tf_.pub(_tf, _stamp, map_frame_, odom_frame_);
 }
 
 } // namespace odom
@@ -705,7 +720,9 @@ transform_t scan_matcher::operator()(const scan::scan_t &_scan) {
 controller::controller(ros::NodeHandle &_nh) :
         icp_(_nh),
         scan_interface_(_nh, this),
-        frame_handler_(_nh) {}
+        frame_handler_(_nh) {
+          pub_ = _nh.advertise<geometry_msgs::PoseWithCovarianceStamped>("/icp_pose", 1, false);
+        }
 
 void controller::update(const scan::scan_t &_scan,
                         const stamp_t &_scan_stamp,
@@ -724,6 +741,23 @@ void controller::update(const scan::scan_t &_scan,
   // calculate the correction
   const transform_t new_to_base = new_to_old * map_to_base;
   const transform_t map_to_odom = frame_handler_.get_map_to_odom(new_to_base);
+
+  geometry_msgs::PoseWithCovarianceStamped msg;
+  auto new_to_base_tf = internal::to_transform(new_to_base);
+  if (std::isnan(new_to_base_tf.transform.translation.x) || std::isnan(new_to_base_tf.transform.translation.y)) {
+    I_SEE_PEE_WARN("new_to_base_tf is nan");
+    return;
+  }
+  msg.header.stamp = ros::Time::now();
+  msg.header.frame_id = "map";
+  msg.pose.pose.position.x = new_to_base_tf.transform.translation.x;
+  msg.pose.pose.position.y = new_to_base_tf.transform.translation.y;
+  msg.pose.pose.position.z = new_to_base_tf.transform.translation.z;
+  msg.pose.pose.orientation.x = new_to_base_tf.transform.rotation.x;
+  msg.pose.pose.orientation.y = new_to_base_tf.transform.rotation.y;
+  msg.pose.pose.orientation.z = new_to_base_tf.transform.rotation.z;
+  msg.pose.pose.orientation.w = new_to_base_tf.transform.rotation.w;
+  pub_.publish(msg);
 
   // publish the transform
   frame_handler_.set_map_to_odom(map_to_odom, _scan_stamp);
